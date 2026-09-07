@@ -1,0 +1,331 @@
+(function () {
+  var DATA = window.__DATA__ || { updated: "", competitions: [] };
+  var TODAY = new Date(); TODAY.setHours(0, 0, 0, 0);
+  var MS_DAY = 864e5;
+
+  var STATUS = {
+    open:     { label: "报名中",     order: 0 },
+    upcoming: { label: "即将开始",   order: 1 },
+    running:  { label: "进行中",     order: 2 },
+    closed:   { label: "报名已结束", order: 3 },
+    tbd:      { label: "日期待定",   order: 4 },
+    ended:    { label: "已结束",     order: 5 }
+  };
+
+  function parse(d) { return d ? new Date(d + "T00:00:00") : null; }
+  function fmt(d) { return d ? d.replace(/-/g, ".") : "待定"; }
+  function daysTo(d) { return Math.ceil((parse(d) - TODAY) / MS_DAY); }
+
+  // deadline = 报名截止（未知则为空）；end = 比赛结束；signup = 源站报名状态
+  function statusOf(c) {
+    var s = parse(c.start), dl = parse(c.deadline), e = parse(c.end);
+    var final = e || dl;
+    if (!s && !dl && !e) return "tbd";
+    if ((final && TODAY > final) || c.signup === "ended") return "ended";
+    if (c.signup === "closed" || (dl && TODAY > dl)) return "closed";
+    if (s && TODAY < s) return "upcoming";
+    if (dl || c.signup === "open") return "open";
+    return e ? "running" : "tbd";
+  }
+
+  function regionOf(c) {
+    if (c.tags.indexOf("MLH") >= 0 || c.tags.indexOf("国际") >= 0) return "国际";
+    if (/,\s*[A-Z]{2}$/.test(c.city || "")) return "国际";
+    return /[一-鿿]/.test(c.organizer || c.name) ? "国内" : "国际";
+  }
+
+  function prizeValue(c) {
+    if (!c.prize) return 0;
+    var mult = /USD|\$|美元/i.test(c.prize) ? 7.2 : 1;
+    var best = 0, m, re = /([\d,]+(?:\.\d+)?)\s*(万|[kKwW])?/g;
+    while ((m = re.exec(c.prize))) {
+      var v = parseFloat(m[1].replace(/,/g, ""));
+      if (m[2] === "万" || m[2] === "w" || m[2] === "W") v *= 10000;
+      else if (m[2] === "k" || m[2] === "K") v *= 1000;
+      if (v > best) best = v;
+    }
+    return best * mult;
+  }
+
+  var comps = DATA.competitions.map(function (c) {
+    c._status = statusOf(c);
+    c._days = c.deadline ? daysTo(c.deadline) : null;
+    c._endDays = c.end ? daysTo(c.end) : null;
+    c._region = regionOf(c);
+    c._online = (c.city || "").indexOf("线上") >= 0;
+    c._prize = prizeValue(c);
+    return c;
+  });
+
+  // ── 状态 ──
+  var state = { q: "", status: "all", type: "all", region: "all", tag: null, sort: "deadline", view: "list", favOnly: false };
+  var favs = new Set(JSON.parse(localStorage.getItem("favs") || "[]"));
+
+  function saveFavs() { localStorage.setItem("favs", JSON.stringify(Array.from(favs))); }
+  var calCursor = new Date(TODAY.getFullYear(), TODAY.getMonth(), 1);
+
+  // ── 报头 ──
+  var weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+  document.getElementById("today-line").textContent =
+    TODAY.getFullYear() + " 年 " + (TODAY.getMonth() + 1) + " 月 " + TODAY.getDate() + " 日 · 星期" + weekdays[TODAY.getDay()];
+  document.getElementById("updated-line").textContent = "数据更新于 " + DATA.updated + " · 共收录 " + comps.length + " 场赛事";
+
+  var openCount = comps.filter(function (c) { return c._status === "open"; }).length;
+  var weekCount = comps.filter(function (c) { return c._status === "open" && c._days !== null && c._days <= 7; }).length;
+  document.getElementById("stats").innerHTML =
+    '<div class="stat"><b>' + comps.length + '</b><span>收录赛事</span></div>' +
+    '<div class="stat"><b>' + openCount + '</b><span>可报名</span></div>' +
+    '<div class="stat hot"><b>' + weekCount + '</b><span>7 天内报名截止</span></div>';
+
+  // ── 筛选 chips ──
+  function chips(el, items, key) {
+    el.innerHTML = items.map(function (it) {
+      return '<button class="chip' + (it.value === state[key] ? " active" : "") + '" data-value="' + it.value + '">' + it.label + "</button>";
+    }).join("");
+    el.onclick = function (ev) {
+      var b = ev.target.closest(".chip");
+      if (!b) return;
+      state[key] = b.dataset.value;
+      el.querySelectorAll(".chip").forEach(function (x) { x.classList.toggle("active", x === b); });
+      render();
+    };
+  }
+
+  chips(document.getElementById("status-chips"),
+    [{ value: "all", label: "全部" }].concat(Object.keys(STATUS).map(function (k) {
+      return { value: k, label: STATUS[k].label };
+    })), "status");
+
+  var typeCounts = {};
+  comps.forEach(function (c) { typeCounts[c.type] = (typeCounts[c.type] || 0) + 1; });
+  var topTypes = Object.keys(typeCounts).sort(function (a, b) { return typeCounts[b] - typeCounts[a]; }).slice(0, 5);
+  chips(document.getElementById("type-chips"),
+    [{ value: "all", label: "所有类型" }].concat(topTypes.map(function (t) {
+      return { value: t, label: t + " " + typeCounts[t] };
+    })), "type");
+
+  chips(document.getElementById("region-chips"),
+    [{ value: "all", label: "全部地区" }, { value: "国内", label: "国内" }, { value: "国际", label: "国际" },
+     { value: "线上", label: "线上" }, { value: "线下", label: "线下" }], "region");
+
+  var activeTagBtn = document.getElementById("active-tag");
+  function setTag(tag) {
+    state.tag = tag;
+    activeTagBtn.hidden = !tag;
+    if (tag) activeTagBtn.textContent = "标签：" + tag + " ✕";
+    render();
+  }
+  activeTagBtn.onclick = function () { setTag(null); };
+
+  document.getElementById("q").oninput = function () { state.q = this.value.trim().toLowerCase(); render(); };
+  document.getElementById("sort").onchange = function () { state.sort = this.value; render(); };
+
+  document.getElementById("view-toggle").onclick = function (ev) {
+    var b = ev.target.closest("button");
+    if (!b) return;
+    state.view = b.dataset.view;
+    this.querySelectorAll("button").forEach(function (x) { x.classList.toggle("active", x === b); });
+    render();
+  };
+
+  // ── 过滤与排序 ──
+  function filtered() {
+    return comps.filter(function (c) {
+      if (state.favOnly && !favs.has(c.id)) return false;
+      if (state.status !== "all" && c._status !== state.status) return false;
+      if (state.type !== "all" && c.type !== state.type) return false;
+      if (state.region === "国内" || state.region === "国际") { if (c._region !== state.region) return false; }
+      else if (state.region === "线上") { if (!c._online) return false; }
+      else if (state.region === "线下") { if (c._online) return false; }
+      if (state.tag && c.tags.indexOf(state.tag) < 0 && c.city !== state.tag) return false;
+      if (state.q) {
+        var hay = (c.name + " " + (c.organizer || "") + " " + c.tags.join(" ") + " " + (c.city || "")).toLowerCase();
+        if (hay.indexOf(state.q) < 0) return false;
+      }
+      return true;
+    }).sort(function (a, b) {
+      if (state.sort === "name") return a.name.localeCompare(b.name, "zh");
+      if (state.sort === "prize") return b._prize - a._prize;
+      if (state.sort === "start") return (a.start || "9999") < (b.start || "9999") ? -1 : 1;
+      var d = STATUS[a._status].order - STATUS[b._status].order;
+      if (d) return d;
+      return (a.deadline || a.end || "9999") < (b.deadline || b.end || "9999") ? -1 : 1;
+    });
+  }
+
+  // ── 卡片 ──
+  function badge(c) {
+    var s = c._status;
+    if (s === "open" && c._days !== null && c._days <= 7)
+      return '<span class="badge urgent">急 · ' + (c._days === 0 ? "今天" : c._days + " 天后") + "报名截止</span>";
+    return '<span class="badge ' + s + '">' + STATUS[s].label + "</span>";
+  }
+
+  // 只有拿到真实报名截止才倒计时；否则退化为「距结束」，不做紧迫提示
+  function countdown(c) {
+    if (c._status === "open" && c._days !== null)
+      return '<span class="countdown' + (c._days > 30 ? " far" : "") + '">报名 D-' + c._days + "</span>";
+    if (c._endDays !== null && c._endDays >= 0 && c._status !== "upcoming" && c._status !== "ended")
+      return '<span class="countdown far">结束 D-' + c._endDays + "</span>";
+    return "";
+  }
+
+  function dateLine(c) {
+    var tail = c.deadline ? "报名截止 " + fmt(c.deadline) : c.end ? "结束 " + fmt(c.end) : "待定";
+    return fmt(c.start) + " → " + tail;
+  }
+
+  function cardHTML(c, i) {
+    return '<article class="card' + (c.featured ? " featured" : "") + '" data-id="' + c.id + '" style="animation-delay:' + Math.min(i * 30, 400) + 'ms">' +
+      '<div class="card-top">' + badge(c) +
+      '<span class="card-top-right">' + countdown(c) +
+      '<button class="fav-btn' + (favs.has(c.id) ? " on" : "") + '" data-fav="' + c.id + '" title="收藏">' + (favs.has(c.id) ? "★" : "☆") + "</button></span></div>" +
+      '<h3 class="card-name">' + esc(c.name) + "</h3>" +
+      (c.organizer ? '<div class="card-org">主办：' + esc(c.organizer) + "</div>" : "") +
+      '<div class="card-tags">' + c.tags.slice(0, 4).map(tagBtn).join("") +
+      (c.city ? tagBtn(c.city) : "") + "</div>" +
+      '<div class="card-dates"><span>' + dateLine(c) + "</span>" +
+      (c.prize ? '<span class="card-prize">' + esc(c.prize) + "</span>" : "") + "</div>" +
+      "</article>";
+  }
+
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"); }
+
+  function tagBtn(t) { return '<button class="tag" data-tag="' + esc(t) + '">' + esc(t) + "</button>"; }
+
+  // 极简 markdown：标题 / 列表 / 加粗 / 段落
+  function md(s) {
+    var out = [], inList = false, m;
+    esc(s).split(/\r?\n/).forEach(function (l) {
+      if ((m = l.match(/^#{1,4}\s*(.*)/))) { if (inList) { out.push("</ul>"); inList = false; } out.push("<h4>" + m[1] + "</h4>"); }
+      else if ((m = l.match(/^\s*[-*]\s+(.*)/))) { if (!inList) { out.push("<ul>"); inList = true; } out.push("<li>" + m[1] + "</li>"); }
+      else if (!l.trim()) { if (inList) { out.push("</ul>"); inList = false; } }
+      else out.push("<p>" + l + "</p>");
+    });
+    if (inList) out.push("</ul>");
+    return out.join("").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  }
+
+  // ── 渲染 ──
+  function render() {
+    var list = filtered();
+    var isList = state.view === "list";
+    document.getElementById("list-view").hidden = !isList;
+    document.getElementById("featured-section").hidden = !isList;
+    document.getElementById("calendar-view").hidden = isList;
+    if (isList) {
+      var feat = list.filter(function (c) { return c.featured; });
+      var rest = list.filter(function (c) { return !c.featured; });
+      document.getElementById("featured-section").hidden = !feat.length;
+      document.getElementById("featured-grid").innerHTML = feat.map(cardHTML).join("");
+      document.getElementById("card-grid").innerHTML = rest.map(cardHTML).join("");
+      document.getElementById("list-count").textContent = "共 " + rest.length + " 场";
+      document.getElementById("empty").hidden = list.length > 0;
+    } else {
+      renderCalendar(list);
+    }
+  }
+
+  // ── 日历 ──
+  function renderCalendar(list) {
+    var y = calCursor.getFullYear(), m = calCursor.getMonth();
+    document.getElementById("cal-title").textContent = y + " 年 " + (m + 1) + " 月";
+
+    var byDay = {};
+    list.forEach(function (c) {
+      function put(v, kind) { if (v) (byDay[v] = byDay[v] || []).push({ c: c, kind: kind }); }
+      put(c.deadline, "deadline");
+      if (!c.deadline) put(c.end, "end");
+      put(c.start, "start");
+    });
+
+    var first = new Date(y, m, 1), startPad = first.getDay();
+    var daysInMonth = new Date(y, m + 1, 0).getDate();
+    var html = weekdays.map(function (w) { return '<div class="cal-dow">' + w + "</div>"; }).join("");
+
+    for (var i = 0; i < startPad; i++) html += '<div class="cal-cell other"></div>';
+    for (var d = 1; d <= daysInMonth; d++) {
+      var iso = y + "-" + String(m + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+      var day = byDay[iso] || [];
+      var items = ["deadline", "end", "start"].reduce(function (acc, k) {
+        return acc.concat(day.filter(function (x) { return x.kind === k; }));
+      }, []);
+      var isToday = parse(iso).getTime() === TODAY.getTime();
+      html += '<div class="cal-cell' + (isToday ? " today-cell" : "") + '"><div class="cal-day">' + d + "</div>";
+      items.slice(0, 3).forEach(function (x) {
+        var mark = { deadline: ["止 ", "（报名截止）"], end: ["终 ", "（比赛结束）"], start: ["始 ", "（开始）"] }[x.kind];
+        html += '<button class="cal-item' + (x.kind === "start" ? " start-mark" : x.kind === "end" ? " end-mark" : "") +
+          '" data-id="' + x.c.id + '" title="' + esc(x.c.name) + mark[1] + '">' + mark[0] + esc(x.c.name) + "</button>";
+      });
+      if (items.length > 3) html += '<div class="cal-more">+' + (items.length - 3) + " 场</div>";
+      html += "</div>";
+    }
+    document.getElementById("cal-grid").innerHTML = html;
+  }
+
+  document.getElementById("cal-prev").onclick = function () { calCursor.setMonth(calCursor.getMonth() - 1); render(); };
+  document.getElementById("cal-next").onclick = function () { calCursor.setMonth(calCursor.getMonth() + 1); render(); };
+
+  // ── 详情弹窗 ──
+  var modal = document.getElementById("modal");
+  document.body.addEventListener("click", function (ev) {
+    var tag = ev.target.closest("[data-tag]");
+    if (tag) {
+      closeModal();
+      setTag(tag.dataset.tag === state.tag ? null : tag.dataset.tag);
+      return;
+    }
+    var fav = ev.target.closest(".fav-btn");
+    if (fav) {
+      var id = fav.dataset.fav;
+      favs.has(id) ? favs.delete(id) : favs.add(id);
+      saveFavs();
+      render();
+      return;
+    }
+    var el = ev.target.closest("[data-id]");
+    if (!el) return;
+    var c = comps.find(function (x) { return x.id === el.dataset.id; });
+    if (c) openModal(c);
+  });
+
+  document.getElementById("fav-toggle").onclick = function () {
+    state.favOnly = !state.favOnly;
+    this.classList.toggle("active", state.favOnly);
+    render();
+  };
+
+  function openModal(c) {
+    var rows = [
+      ["状态", badge(c) + " " + countdown(c)],
+      ["主办方", esc(c.organizer || "见官方页面")],
+      ["报名截止", c.deadline ? '<span class="mono">' + fmt(c.deadline) + "</span>"
+        : '<span class="hint">未获取到，以官方页面为准</span>'],
+      ["赛程", '<span class="mono">' + fmt(c.start) + " → " + fmt(c.end || c.deadline) + "</span>"],
+      ["奖金", c.prize ? '<b style="color:var(--vermilion)">' + esc(c.prize) + "</b>" : "见官方页面"],
+      ["类型", esc(c.type) + (c.city ? " · " + esc(c.city) : "")],
+      ["标签", c.tags.map(tagBtn).join(" ")]
+    ];
+    document.getElementById("modal-body").innerHTML =
+      "<h3>" + esc(c.name) + "</h3>" +
+      '<table class="modal-table">' + rows.map(function (r) {
+        return "<tr><td>" + r[0] + "</td><td>" + r[1] + "</td></tr>";
+      }).join("") + "</table>" +
+      (c.detail ? '<div class="modal-md">' + md(c.detail) + "</div>"
+        : c.description ? '<p class="modal-desc">' + esc(c.description) + "</p>" : "") +
+      '<div class="modal-actions">' +
+      (c.official_url ? '<a class="btn primary" href="' + esc(c.official_url) + '" target="_blank" rel="noopener">前往官方页面 ↗</a>' : "") +
+      c.sources.map(function (s) {
+        return '<a class="btn" href="' + esc(s.url) + '" target="_blank" rel="noopener">来源：' + esc(s.name) + " ↗</a>";
+      }).join("") + "</div>";
+    modal.hidden = false;
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeModal() { modal.hidden = true; document.body.style.overflow = ""; }
+  document.getElementById("modal-close").onclick = closeModal;
+  modal.onclick = function (ev) { if (ev.target === modal) closeModal(); };
+  document.addEventListener("keydown", function (ev) { if (ev.key === "Escape") closeModal(); });
+
+  render();
+})();
