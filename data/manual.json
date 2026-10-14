@@ -94,4 +94,29 @@
   {"name": "全国大学生水产养殖技能大赛", "official_url": ""},
   {"name": "全国大学生水产与海洋科学创新竞赛", "official_url": ""},
   {"name": "全国大学生紫菜产业创新创业大赛", "official_url": ""}
+  
+  {
+    "name": "【嵌入式/AI】蓝桥杯（C/C++组）",
+    "url": "https://dasai.lanqiao.cn/"
+  },
+  {
+    "name": "【嵌入式/AI】全国大学生电子设计竞赛",
+    "url": "https://www.nuedc-training.com.cn/"
+  },
+  {
+    "name": "【嵌入式/AI】全国大学生物联网设计竞赛",
+    "url": "https://www.baidu.com/s?wd=全国大学生物联网设计竞赛"
+  },
+  {
+    "name": "【嵌入式/AI】中国国际大学生创新大赛",
+    "url": "https://cy.ncss.cn/"
+  },
+  {
+    "name": "【商科/综合】“学创杯”全国大学生创业综合模拟大赛",
+    "url": "https://www.baidu.com/s?wd=学创杯全国大学生创业综合模拟大赛"
+  },
+  {
+    "name": "【商科/综合】全国大学生广告艺术大赛",
+    "url": "https://www.baidu.com/s?wd=全国大学生广告艺术大赛"
+  }
 ]
